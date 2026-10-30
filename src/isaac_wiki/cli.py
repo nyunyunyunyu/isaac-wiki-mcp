@@ -35,6 +35,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("search", help="Full-text search across wiki pages")
     p.add_argument("query", help="Search keywords")
     p.add_argument("--top-k", type=int, default=5)
+    p.add_argument("--summary", action="store_true", help="Return page metadata without page bodies")
     p.add_argument("--category", choices=["classes", "enums", "tutorials", "reference"], default=None)
     _add_profile_arguments(p, include_incompatible=True)
     p.add_argument("--format", choices=["text", "json"], default="text")
@@ -42,6 +43,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # read
     p = sub.add_parser("read", help="Read a complete wiki page")
     p.add_argument("page", help="Page name (e.g. EntityPlayer, classes/Game)")
+    p.add_argument("--section", help="Read only this method or heading, including its subsections")
     _add_profile_arguments(p, include_incompatible=True)
     p.add_argument("--format", choices=["text", "json"], default="text")
 
@@ -83,11 +85,13 @@ def _dispatch(facade: WikiFacade, args: argparse.Namespace) -> dict[str, Any]:
             args.query, top_k=args.top_k, category=args.category,
             game=args.game, dependencies=args.dependencies, language=args.language,
             include_incompatible=args.include_incompatible,
+            summary=args.summary,
         )
     elif cmd == "read":
         return facade.read_page(
             args.page, game=args.game, dependencies=args.dependencies, language=args.language,
             include_incompatible=args.include_incompatible,
+            section=args.section,
         )
     elif cmd == "list":
         return facade.list_pages(
@@ -133,8 +137,9 @@ def _text_search(r: dict[str, Any]) -> None:
         print(f"  {i+1}. [{cat}] {title}  (score: {score}, words: {words})")
         print(f"     path: {path}")
         content = item.get("content", "")
-        preview = content.split("---", 2)[-1].strip() if "---" in content else content
-        print(f"     {preview[:200]}...\n")
+        if content:
+            preview = content.split("---", 2)[-1].strip() if "---" in content else content
+            print(f"     {preview[:200]}...\n")
 
 
 def _text_read(r: dict[str, Any]) -> None:
@@ -182,6 +187,9 @@ _PRINTERS = {
 
 
 def main(argv: list[str] | None = None) -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     parser = _build_parser()
     args = parser.parse_args(argv)
 

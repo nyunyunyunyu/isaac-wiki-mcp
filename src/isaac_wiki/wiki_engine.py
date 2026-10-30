@@ -206,6 +206,7 @@ class WikiEngine:
         for path, content in self._index.items():
             if prefix and not path.startswith(prefix):
                 continue
+            content = self._filtered_content(content, include_rgon)
             score = self._score_page(content, path, tokens)
             if score > 0:
                 scored.append((score, path))
@@ -241,32 +242,30 @@ class WikiEngine:
 
         Positional weighting:
         - H1 title match: +15 per token
-        - H2/H3 heading match: +8 per token
+        - H2-H4 heading match: +8 per token
         - Body text match: +1 per occurrence (capped at 10)
 
-        A small length-normalisation factor prevents long pages from
-        dominating purely due to size.
+        Exact heading tokens outrank incidental mentions, regardless of page length.
         """
-        content_lower = content.lower()
         score = 0.0
+        heading_tokens = set()
 
         # Identify sections
         lines = content.split("\n")
-        in_heading = False
-        heading_level = 0
-
         for line in lines:
             stripped = line.strip()
             # Detect headings
-            h_match = re.match(r"^(#{1,3})\s+(.+)", stripped)
+            h_match = re.match(r"^(#{1,4})\s+(.+)", stripped)
             if h_match:
                 level = len(h_match.group(1))
-                heading_text = h_match.group(2).lower()
+                heading_text = h_match.group(2).lower().replace("·", "")
                 for token in tokens:
                     token_lower = token.lower()
+                    if re.search(r"(?<!\w)" + re.escape(token_lower) + r"(?!\w)", heading_text):
+                        heading_tokens.add(token_lower)
                     if level == 1 and token_lower in heading_text:
                         score += 15
-                    elif level <= 3 and token_lower in heading_text:
+                    elif token_lower in heading_text:
                         score += 8
                 continue
 
@@ -277,10 +276,8 @@ class WikiEngine:
                 if count > 0:
                     score += min(count, 10) * 1
 
-        # Normalise by sqrt(content length) — discourage very long pages
-        # from winning purely on size, but don't over-penalise
-        length_factor = max(len(content_lower) ** 0.4, 1.0)
-        return score / length_factor
+        length_factor = max(len(content) ** 0.4, 1.0)
+        return len(heading_tokens) + score / (length_factor + score)
 
     # ------------------------------------------------------------------
     # Page reading
@@ -333,22 +330,14 @@ class WikiEngine:
     def _resolve_path(self, name: str, *, language: str | None = None) -> str | None:
         """Resolve a page name to its relative path in the index.
 
-        Tries multiple lookup strategies in order:
-        1. Direct match (with or without .md extension)
-        2. classes/{name}.md
-        3. enums/{name}.md
-        4. tutorials/{name}.md
-        5. Case-insensitive match across all paths
+        Explicit profiles resolve inside the requested snapshot language first.
+        Legacy calls try direct paths, class/enum/tutorial prefixes, then names.
         """
-        # Direct match
-        if name in self._index:
-            return name
-        if f"{name}.md" in self._index:
-            return f"{name}.md"
-
         if language:
             reference_prefix = f"reference/{language}/"
             normalized_name = name.removesuffix(".md").replace("\\", "/")
+            normalized_name = re.sub(r"^reference/(?:en|zh)/", "", normalized_name)
+            normalized_name = normalized_name.removeprefix("classes/")
             candidate = f"{reference_prefix}{normalized_name}.md"
             if candidate in self._index:
                 return candidate
@@ -360,6 +349,14 @@ class WikiEngine:
                     return path
                 if Path(path).stem.lower() == name_lower:
                     return path
+            if any(path.startswith(reference_prefix) for path in self._index):
+                return None
+
+        # Explicit profiles must not fall through to a different snapshot or legacy page.
+        if name in self._index:
+            return name
+        if f"{name}.md" in self._index:
+            return f"{name}.md"
 
         # Try subdirectories
         for prefix in ("classes", "enums", "tutorials"):

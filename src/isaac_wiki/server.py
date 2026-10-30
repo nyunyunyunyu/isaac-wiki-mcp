@@ -61,7 +61,7 @@ TOOLS = [
             "Full-text search across all Isaac API wiki pages. Returns complete page "
             "content (not fragments) for each match — the LLM gets full class context "
             "with all methods, descriptions, and [[wikilinks]] to related classes. "
-            "Use this to find relevant API classes, enums, or tutorials."
+            "Set summary=true for metadata only, then read a section. Use this to find API classes, enums, or tutorials."
         ),
         "inputSchema": {
             "type": "object",
@@ -76,6 +76,11 @@ TOOLS = [
                     "default": 5,
                     "minimum": 1,
                     "maximum": 10,
+                },
+                "summary": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Return page metadata only; then wiki_read a page or section.",
                 },
                 "category": {
                     "type": "string",
@@ -112,7 +117,7 @@ TOOLS = [
         "description": (
             "Read a complete Isaac API wiki page by name. Returns the full page with "
             "all methods, descriptions, DLC compatibility badges, and [[wikilinks]] "
-            "to related classes. Use wiki_search first to find the right page name."
+            "to related classes. Pass section to read just one method or heading. Use wiki_search first to find the page."
         ),
         "inputSchema": {
             "type": "object",
@@ -121,6 +126,7 @@ TOOLS = [
                     "type": "string",
                     "description": "Page name or path. Examples: 'EntityPlayer', 'Game', 'enums/EntityType'.",
                 },
+                "section": {"type": "string", "description": "Optional method or heading, e.g. GetHearts; includes subsections."},
                 "game": {"type": "string", "enum": ["rep", "rep+"]},
                 "dependencies": {
                     "type": "array",
@@ -223,6 +229,7 @@ def _handle(request: dict[str, Any]) -> None:
                     dependencies=arguments.get("dependencies"),
                     language=arguments.get("language", "auto"),
                     include_incompatible=arguments.get("include_incompatible", False),
+                    summary=arguments.get("summary", False),
                 )
             elif tool_name == "wiki_read":
                 result = facade.read_page(
@@ -231,6 +238,7 @@ def _handle(request: dict[str, Any]) -> None:
                     dependencies=arguments.get("dependencies"),
                     language=arguments.get("language", "auto"),
                     include_incompatible=arguments.get("include_incompatible", False),
+                    section=arguments.get("section"),
                 )
             elif tool_name == "wiki_list":
                 result = facade.list_pages(
@@ -282,6 +290,9 @@ def _handle(request: dict[str, Any]) -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 def main() -> None:
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     logger.info("isaac-rag MCP server starting on stdio ...")
     for line in sys.stdin:
         line = line.strip()

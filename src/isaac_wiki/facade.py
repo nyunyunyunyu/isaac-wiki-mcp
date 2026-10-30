@@ -11,6 +11,7 @@ the wiki/ directory, with zero ML dependencies.
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -60,6 +61,7 @@ class WikiFacade:
         dependencies: list[str] | None = None,
         language: str = "auto",
         include_incompatible: bool = False,
+        summary: bool = False,
     ) -> dict[str, Any]:
         t0 = time.perf_counter()
         try:
@@ -73,6 +75,8 @@ class WikiFacade:
                 language=resolved_language if use_reference else None,
                 include_rgon="rgon" in profile.dependencies,
             )
+            if summary:
+                results = [{k: v for k, v in item.items() if k != "content"} for item in results]
             elapsed = (time.perf_counter() - t0) * 1000
             return self._ok({
                 "query": query,
@@ -92,6 +96,7 @@ class WikiFacade:
         dependencies: list[str] | None = None,
         language: str = "auto",
         include_incompatible: bool = False,
+        section: str | None = None,
     ) -> dict[str, Any]:
         try:
             profile, resolved_language = self._resolve_profile(page, game, dependencies, language)
@@ -104,11 +109,44 @@ class WikiFacade:
             )
             if result is None:
                 return self._err(f"Page not found: {page}")
+            if section is not None:
+                result["content"] = self._section(result["content"], section)
+                result["section"] = section
+                result["word_count"] = len(result["content"].split())
             result["profile"] = self._profile_payload(profile, resolved_language)
             result["include_incompatible"] = include_incompatible
             return self._ok(result)
         except Exception as exc:
             return self._err(str(exc))
+
+    @staticmethod
+    def _section(content: str, name: str) -> str:
+        if not name.strip():
+            raise ValueError("section must not be empty")
+        lines = content.splitlines(keepends=True)
+        headings = []
+        fence = None
+        for index, line in enumerate(lines):
+            stripped = line.lstrip()
+            if stripped.startswith(("```", "~~~")):
+                marker = stripped[:3]
+                fence = None if fence == marker else marker if fence is None else fence
+            if fence is not None:
+                continue
+            match = re.match(r"^(#{1,6})\s+(.+)", line)
+            if match:
+                title = re.sub(r"\{:[^}]*\}", "", match[2]).replace("·", "").strip()
+                headings.append((index, len(match[1]), title))
+        parts, end = [], 0
+        pattern = re.compile(r"(?<!\w)" + re.escape(name.strip()) + r"(?!\w)", re.IGNORECASE)
+        for pos, (start, level, title) in enumerate(headings):
+            if start < end or not pattern.search(title):
+                continue
+            end = next((row[0] for row in headings[pos + 1:] if row[1] <= level), len(lines))
+            parts.append("".join(lines[start:end]).strip())
+        if not parts:
+            raise ValueError(f"Section not found: {name}; use a method or heading name")
+        return "\n\n".join(parts)
 
     def list_pages(
         self,
